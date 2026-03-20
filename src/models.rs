@@ -1,35 +1,27 @@
 use clap::Parser;
 use serde::Serialize;
 
-/// Packet Analyzer CLI
 #[derive(Parser, Debug, Serialize)]
 #[command(author, version, about = "Network packet analyzer", long_about = None)]
 pub struct Args {
-    /// PCAP file to analyze
     #[arg(long)]
     pub pcap: Option<String>,
 
-    /// Network interface for live capture (incompatible with --pcap)
     #[arg(long, conflicts_with = "pcap")]
     pub interface: Option<String>,
 
-    /// List available network interfaces and exit
     #[arg(long)]
     pub cards: bool,
 
-    /// Capture filter
     #[arg(long)]
     pub filter: Option<String>,
 
-    /// Number of packets to capture (default: 10)
     #[arg(long, default_value_t = 10)]
     pub packet_count: u32,
 
-    /// Output format
     #[arg(long, default_value = "json")]
     pub output_format: String,
 
-    /// Output file name
     #[arg(long)]
     pub output_file: Option<String>,
 }
@@ -37,6 +29,7 @@ pub struct Args {
 #[derive(Debug, Serialize, Clone)]
 pub struct VendorSpecificInfo {
     pub oui: String,
+    pub vendor_type: Option<u8>,
     pub data_hex: String,
     pub length: usize,
 }

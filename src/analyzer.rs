@@ -1,9 +1,14 @@
 use crate::models::{BeaconInfo, DroneInfo, VendorSpecificInfo};
+//use pcap::{Capture, Device};
 use pcap::Capture;
 
 const BEACON_TYPE: u16 = 0;
 const BEACON_SUBTYPE: u16 = 8;
-const DJI_OUI: &str = "fa:0b:bc";
+/* 
+pub fn list_interfaces() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let devices = Device::list()?;
+    Ok(devices.into_iter().map(|d| d.name).collect())
+}*/
 
 pub fn analyze_pcap(
     pcap_file: &str,
@@ -31,13 +36,66 @@ pub fn analyze_pcap(
 
     Ok((messages, beacons))
 }
+/* 
+pub fn capture_live(
+    interface_name: &str,
+    filter: Option<&str>,
+    packet_count: u32,
+) -> Result<(Vec<String>, Vec<BeaconInfo>), Box<dyn std::error::Error>> {
+    let mut messages = Vec::new();
+    let mut beacons = Vec::new();
 
+    messages.push(format!("Capturing live on interface: {}", interface_name));
+
+    let default_filter = "wlan type mgt subtype beacon";
+    let capture_filter = filter.unwrap_or(default_filter);
+    messages.push(format!("Using capture filter: {}", capture_filter));
+
+    let mut cap = Capture::from_device(interface_name)?
+        .promisc(true)
+        .immediate_mode(true)
+        .open()?;
+
+    cap.filter(capture_filter, true)?;
+
+    let mut packet_number = 0usize;
+
+    while packet_number < packet_count as usize {
+        match cap.next_packet() {
+            Ok(packet) => {
+                packet_number += 1;
+
+                if let Some(beacon) = parse_beacon(packet_number, packet.data) {
+                    println!(
+                        "[{}] MAC={} SSID={} DroneID={}",
+                        beacon.packet_number,
+                        beacon.source_mac,
+                        beacon.ssid,
+                        beacon.is_drone_id
+                    );
+                    beacons.push(beacon);
+                }
+            }
+            Err(e) => {
+                messages.push(format!("Capture error: {}", e));
+                break;
+            }
+        }
+    }
+
+    messages.push(format!("Captured beacon frames: {}", beacons.len()));
+
+    let drone_count = beacons.iter().filter(|b| b.is_drone_id).count();
+    messages.push(format!("DroneID beacons found: {}", drone_count));
+
+    Ok((messages, beacons))
+}
+*/
 fn parse_beacon(packet_number: usize, data: &[u8]) -> Option<BeaconInfo> {
     if data.len() < 4 {
         return None;
     }
 
-    // Radiotap length: bytes 2 and 3, little-endian
     let radiotap_len = u16::from_le_bytes([data[2], data[3]]) as usize;
 
     if data.len() < radiotap_len + 24 + 12 {
@@ -50,7 +108,6 @@ fn parse_beacon(packet_number: usize, data: &[u8]) -> Option<BeaconInfo> {
         return None;
     }
 
-    // Frame Control: first 2 bytes of 802.11 header
     let frame_control = u16::from_le_bytes([frame[0], frame[1]]);
     let frame_type = (frame_control >> 2) & 0b11;
     let frame_subtype = (frame_control >> 4) & 0b1111;
@@ -60,19 +117,19 @@ fn parse_beacon(packet_number: usize, data: &[u8]) -> Option<BeaconInfo> {
         return None;
     }
 
-    // Source MAC = addr2
     let source_mac = format_mac(&frame[10..16]);
-
-    // Tagged parameters after 24-byte MAC header + 12-byte fixed params
     let tags = &frame[24 + 12..];
 
     let ssid = extract_ssid(tags).unwrap_or_else(|| "<hidden>".to_string());
     let vendor_specific = extract_vendor_specific_tags(tags);
     let has_vendor_specific = !vendor_specific.is_empty();
 
-    let has_dji_oui = vendor_specific.iter().any(|v| v.oui == DJI_OUI);
-
-    let is_drone_id = is_beacon && has_vendor_specific && has_dji_oui;
+    let is_drone_id = is_beacon
+        && has_vendor_specific
+        && vendor_specific.iter().any(|v| {
+            (v.oui == "fa:0b:bc" && v.vendor_type == Some(13))
+                || (v.oui == "6a:5c:35" && v.vendor_type == Some(1))
+        });
 
     let drone_info = if is_drone_id {
         extract_drone_info(tags, &ssid)
@@ -112,41 +169,17 @@ fn extract_drone_info(tags: &[u8], ssid: &str) -> Option<DroneInfo> {
                 String::new()
             };
 
-            if oui == DJI_OUI {
-                // Heuristique simplifiée.
-                // Les offsets peuvent varier selon le format exact.
-                let drone_id = Some(ssid.to_string());
+            let vendor_type = if value.len() >= 4 { Some(value[3]) } else { None };
 
-                let latitude = if value.len() >= 9 {
-                    Some(i32::from_le_bytes([value[5], value[6], value[7], value[8]]) as f64 / 1e7)
-                } else {
-                    None
-                };
-
-                let longitude = if value.len() >= 13 {
-                    Some(i32::from_le_bytes([value[9], value[10], value[11], value[12]]) as f64 / 1e7)
-                } else {
-                    None
-                };
-
-                let altitude = if value.len() >= 15 {
-                    Some(i16::from_le_bytes([value[13], value[14]]) as f32 / 10.0)
-                } else {
-                    None
-                };
-
-                let speed = if value.len() >= 17 {
-                    Some(i16::from_le_bytes([value[15], value[16]]) as f32 / 10.0)
-                } else {
-                    None
-                };
-
+            if (oui == "fa:0b:bc" && vendor_type == Some(13))
+                || (oui == "6a:5c:35" && vendor_type == Some(1))
+            {
                 return Some(DroneInfo {
-                    drone_id,
-                    latitude,
-                    longitude,
-                    altitude,
-                    speed,
+                    drone_id: Some(ssid.to_string()),
+                    latitude: None,
+                    longitude: None,
+                    altitude: None,
+                    speed: None,
                 });
             }
         }
@@ -203,8 +236,11 @@ fn extract_vendor_specific_tags(tags: &[u8]) -> Vec<VendorSpecificInfo> {
                 "<unknown>".to_string()
             };
 
+            let vendor_type = if value.len() >= 4 { Some(value[3]) } else { None };
+
             result.push(VendorSpecificInfo {
                 oui,
+                vendor_type,
                 data_hex: bytes_to_hex(value),
                 length: tag_len,
             });
