@@ -1,7 +1,10 @@
 use clap::Parser;
+use serde::Serialize;
+use std::fs::File;
+use std::io::{self, Write};
 
 /// Packet Analyzer CLI
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize)]
 #[command(author, version, about = "Network packet analyzer", long_about = None)]
 struct Args {
     /// PCAP file to analyze
@@ -24,40 +27,62 @@ struct Args {
     #[arg(long, default_value_t = 10)]
     packet_count: u32,
 
-    /// Output format (json, csv, etc.)
+    /// Output format 
     #[arg(long, default_value = "json")]
     output_format: String,
 
-    /// Output file name
-    #[arg(long, default_value = "results.json")]
-    output_file: String,
+    /// Output file name (if None, prints to terminal)
+    #[arg(long)]
+    output_file: Option<String>,
 }
 
-fn main() {
+// Structure pour contenir le rapport final
+#[derive(Serialize)]
+struct Report<'a> {
+    args: &'a Args,
+    messages: Vec<String>,
+}
+
+fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    println!("{:#?}", args);
+    let mut messages: Vec<String> = Vec::new();
 
-    // Example logic
+    // Exemple de logique
     if args.cards {
-        println!("Listing network interfaces...");
+        messages.push("Listing network interfaces...".to_string());
         // TODO: implement interface listing
-        return;
     }
 
-    if let Some(pcap_file) = args.pcap {
-        println!("Analyzing PCAP file: {}", pcap_file);
+    if let Some(pcap_file) = &args.pcap {
+        messages.push(format!("Analyzing PCAP file: {}", pcap_file));
     }
 
-    if let Some(interface) = args.interface {
-        println!("Capturing on interface: {}", interface);
+    if let Some(interface) = &args.interface {
+        messages.push(format!("Capturing on interface: {}", interface));
     }
 
-    println!("Packet count: {}", args.packet_count);
-    println!("Output format: {}", args.output_format);
-    println!("Output file: {}", args.output_file);
+    messages.push(format!("Packet count: {}", args.packet_count));
+    messages.push(format!("Output format: {}", args.output_format));
 
-    if let Some(filter) = args.filter {
-        println!("Using filter: {}", filter);
+    if let Some(filter) = &args.filter {
+        messages.push(format!("Using filter: {}", filter));
     }
+
+    let report = Report {
+        args: &args,
+        messages,
+    };
+
+    
+    if let Some(ref file_name) = args.output_file {
+        let file = File::create(file_name)?;
+        serde_json::to_writer_pretty(file, &report)?;
+    } else {
+        let stdout = io::stdout();
+        let handle = stdout.lock();
+        serde_json::to_writer_pretty(handle, &report)?;
+    }
+
+    Ok(())
 }
